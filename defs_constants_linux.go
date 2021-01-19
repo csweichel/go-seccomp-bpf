@@ -17,6 +17,8 @@
 
 // +build ignore
 
+//go:generate sh -c "go tool cgo -godefs defs_constants_linux.go | gofmt > zconstants.go"
+
 package seccomp
 
 // #include <errno.h>
@@ -60,6 +62,7 @@ const (
 	ActionTrace       Action = C.SECCOMP_RET_TRACE        // Pass to a tracer or disallow.
 	ActionLog         Action = C.SECCOMP_RET_LOG          // Allow after logging.
 	ActionAllow       Action = C.SECCOMP_RET_ALLOW        // Allow.
+	ActionNotify      Action = C.SECCOMP_RET_USER_NOTIF   // User notify
 )
 
 const (
@@ -73,6 +76,8 @@ const (
 	// When adding a new filter, synchronize all other threads of the calling
 	// process to the same seccomp filter tree. Since Linux 3.17.
 	FilterFlagTSync FilterFlag = C.SECCOMP_FILTER_FLAG_TSYNC
+
+	FilterFlagNewFilter FilterFlag = C.SECCOMP_FILTER_FLAG_NEW_LISTENER
 
 	// All filter return actions except SECCOMP_RET_ALLOW should be logged.
 	// Since Linux 4.14.

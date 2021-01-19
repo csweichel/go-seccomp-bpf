@@ -30,7 +30,7 @@ import (
 func Supported() bool {
 	// Strict mode requires that flags be set to 0, but we are sending 1 so
 	// this will return EINVAL if the syscall exists and is allowed.
-	if err := seccomp(seccompSetModeStrict, 1, nil); err == syscall.EINVAL {
+	if _, err := seccomp(seccompSetModeStrict, 1, nil); err == syscall.EINVAL {
 		return true
 	}
 
@@ -67,7 +67,8 @@ func LoadFilter(filter Filter) error {
 		}
 	}
 
-	if err = seccomp(seccompSetModeFilter, filter.Flag, unsafe.Pointer(program)); err != nil {
+	_, err = seccomp(seccompSetModeFilter, filter.Flag, unsafe.Pointer(program))
+	if err != nil {
 		if err == syscall.ENOSYS {
 			return errors.Wrap(err, "failed loading seccomp filter: seccomp "+
 				"is not supported by the kernel")
@@ -76,6 +77,44 @@ func LoadFilter(filter Filter) error {
 	}
 
 	return nil
+}
+
+// LoadFilterNotify will install seccomp using native methods.
+func LoadFilterNotify(filter Filter) (fd uintptr, err error) {
+	insts, err := filter.Policy.Assemble()
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to assemble policy")
+	}
+
+	raw, err := bpf.Assemble(insts)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to assemble BPF instructions")
+	}
+
+	sockFilter := sockFilter(raw)
+	program := &syscall.SockFprog{
+		Len:    uint16(len(sockFilter)),
+		Filter: &sockFilter[0],
+	}
+
+	if filter.NoNewPrivs {
+		if err = SetNoNewPrivs(); err != nil {
+			return 0, errors.Wrap(err, "failed to set no_new_privs with prctl")
+		}
+	}
+
+	fd, err = seccomp(seccompSetModeFilter, filter.Flag, unsafe.Pointer(program))
+	if err != nil {
+		if err == syscall.ENOSYS {
+			return 0, errors.Wrap(err, "failed loading seccomp filter: seccomp is not supported by the kernel")
+		}
+		return 0, errors.Wrap(err, "failed loading seccomp filter")
+	}
+	if fd == 0 {
+		return 0, errors.New("received 0 as notification file descriptor")
+	}
+
+	return
 }
 
 func sockFilter(raw []bpf.RawInstruction) []syscall.SockFilter {
@@ -106,10 +145,10 @@ func prctl(option uintptr, args ...uintptr) error {
 }
 
 // seccomp syscall wrapper.
-func seccomp(op uintptr, flags FilterFlag, uargs unsafe.Pointer) error {
-	_, _, e := syscall.Syscall(unix.SYS_SECCOMP, op, uintptr(flags), uintptr(uargs))
+func seccomp(op uintptr, flags FilterFlag, uargs unsafe.Pointer) (fd uintptr, err error) {
+	fd, _, e := syscall.Syscall(unix.SYS_SECCOMP, op, uintptr(flags), uintptr(uargs))
 	if e != 0 {
-		return e
+		return 0, e
 	}
-	return nil
+	return
 }
